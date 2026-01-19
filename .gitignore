@@ -1,0 +1,5 @@
+# Python virtual environment
+.venv/
+
+# AWS SAM build artifacts
+.aws-sam/
