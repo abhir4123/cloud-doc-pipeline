@@ -1,0 +1,57 @@
+name: Deploy (SAM)
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: cloud-doc-pipeline
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r lambdas/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: |
+          pytest -q
+
+      - name: Install AWS SAM CLI
+        run: |
+          pip install aws-sam-cli
+
+      - name: SAM build
+        run: |
+          sam build
+
+      - name: SAM deploy
+        run: |
+          sam deploy \
+            --stack-name cloud-doc-pipeline-dev2 \
+            --region "${{ secrets.AWS_REGION }}" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides ProjectName=cloud-doc-pipeline StageName=dev2

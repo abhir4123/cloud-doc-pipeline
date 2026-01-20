@@ -1,15 +1,11 @@
-# ----------------------------
 # Python / Virtual Environments
-# ----------------------------
 .venv/
 venv/
 env/
 ENV/
 *.venv/
 
-# ----------------------------
 # Python build / cache artifacts
-# ----------------------------
 __pycache__/
 *.py[cod]
 *.pyo
@@ -24,27 +20,22 @@ dist/
 build/
 *.egg-info/
 
-# ----------------------------
 # AWS SAM / Serverless artifacts
-# ----------------------------
 .aws-sam/
 samconfig.toml
 
-# ----------------------------
 # Logs and temp files
-# ----------------------------
 *.log
 *.tmp
 
-# ----------------------------
 # Local test files (project-specific)
-# ----------------------------
 test.pdf
 
-# ----------------------------
 # OS / Editor junk
-# ----------------------------
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Local IAM user data files (project-specific)
+IAM_users.txt
