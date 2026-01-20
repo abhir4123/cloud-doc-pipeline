@@ -10,8 +10,21 @@ Globals:
   Function:
     Timeout: 3
 
+Parameters:
+  ProjectName:
+    Type: String
+    Default: cloud-doc-pipeline
+    Description: Base name used for resource naming
+  StageName:
+    Type: String
+    Default: dev2
+    AllowedValues:
+      - dev2
+      - prod
+    Description: Deployment stage (affects naming and behavior)
+
 Resources:
-  HelloWorldFunction:
+  DocumentApiFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
       CodeUri: hello_world/
@@ -19,23 +32,97 @@ Resources:
       Runtime: python3.11
       Architectures:
         - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocumentsTable
+      Environment:
+        Variables:
+          DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
+          DOCUMENTS_BUCKET_NAME: !Ref DocumentsBucket
       Events:
-        HelloWorld:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+        CreateDocument:
+          Type: Api
           Properties:
-            Path: /hello
-            Method: get
+            Path: /documents
+            Method: post
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${StageName}-documents-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+  DocumentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${StageName}-documents"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+  S3IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: s3_ingest.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocumentsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - !Sub "arn:aws:s3:::${ProjectName}-${StageName}-documents-${AWS::AccountId}/*"
+      Environment:
+        Variables:
+          DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
+      Events:
+        S3UploadEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref DocumentsBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: documents/
+                  - Name: suffix
+                    Value: .pdf
 
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
   # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  HelloWorldApi:
-    Description: "API Gateway endpoint URL for Prod stage for Hello World function"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/hello/"
-  HelloWorldFunction:
-    Description: "Hello World Lambda Function ARN"
-    Value: !GetAtt HelloWorldFunction.Arn
-  HelloWorldFunctionIamRole:
-    Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt HelloWorldFunctionRole.Arn
+  ApiBaseUrl:
+    Description: API Gateway base URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod"
+  DocumentsBucketName:
+    Description: S3 bucket for uploaded documents
+    Value: !Ref DocumentsBucket
+  DocumentsTableName:
+    Description: DynamoDB table for document metadata and audit logs
+    Value: !Ref DocumentsTable
+  DocumentApiFunctionArn:
+    Description: Document API Lambda Function ARN
+    Value: !GetAtt DocumentApiFunction.Arn
+  S3IngestFunctionArn:
+    Description: S3 ingest Lambda Function ARN
+    Value: !GetAtt S3IngestFunction.Arn
