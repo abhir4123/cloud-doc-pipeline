@@ -8,17 +8,11 @@ Also extracts basic PDF metadata using PyPDF2.
 
 import io
 import os
-import sys
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 
 import boto3
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "vendor"))
 from PyPDF2 import PdfReader
-
-dynamodb = boto3.resource("dynamodb")
-s3 = boto3.client("s3")
 
 
 def extract_pdf_metadata(pdf_bytes: bytes) -> tuple[int, str]:
@@ -62,9 +56,13 @@ def _extract_document_id_from_s3_key(s3_key: str) -> str | None:
 
 def lambda_handler(event, context):
     table_name = os.environ["DOCUMENTS_TABLE_NAME"]
+
+    # Create AWS clients/resources at runtime (not import time)
+    dynamodb = boto3.resource("dynamodb")
+    s3 = boto3.client("s3")
+
     table = dynamodb.Table(table_name)
 
-    # S3 events contain one or more Records
     records = event.get("Records", [])
     if not records:
         print("No Records in event")
@@ -79,10 +77,8 @@ def lambda_handler(event, context):
             print(f"Missing bucket/key in record: {record}")
             continue
 
-        # S3 keys are URL-encoded in events sometimes
         s3_key = unquote_plus(raw_key)
 
-        # Expect format: documents/<document_id>/original/<filename>
         document_id = _extract_document_id_from_s3_key(s3_key)
         if not document_id:
             print(f"Could not extract document_id from key: {s3_key}")
@@ -94,20 +90,12 @@ def lambda_handler(event, context):
         now = datetime.now(timezone.utc).isoformat()
         audit_sk = f"AUDIT#{now}"
 
-        # Defaults in case parsing fails
-        page_count = 0
-        text_preview = ""
-
         try:
-            # 1) Download the PDF from S3
             obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
             pdf_bytes = obj["Body"].read()
 
-            # 2) Parse PDF metadata (pure helper, easy to test)
             page_count, text_preview = extract_pdf_metadata(pdf_bytes)
 
-            # 3) Update metadata status to UPLOADED + store extracted fields
-            # We only update fields; we do not overwrite the whole item.
             table.update_item(
                 Key={"pk": pk, "sk": meta_sk},
                 UpdateExpression="SET #st = :s, updated_at = :u, page_count = :p, text_preview = :t",
@@ -120,7 +108,6 @@ def lambda_handler(event, context):
                 },
             )
 
-            # 4) Write an audit record for the upload event
             table.put_item(
                 Item={
                     "pk": pk,
