@@ -1,5 +1,50 @@
-# Python virtual environment
+# ----------------------------
+# Python / Virtual Environments
+# ----------------------------
 .venv/
+venv/
+env/
+ENV/
+*.venv/
 
-# AWS SAM build artifacts
+# ----------------------------
+# Python build / cache artifacts
+# ----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# ----------------------------
+# AWS SAM / Serverless artifacts
+# ----------------------------
 .aws-sam/
+samconfig.toml
+
+# ----------------------------
+# Logs and temp files
+# ----------------------------
+*.log
+*.tmp
+
+# ----------------------------
+# Local test files (project-specific)
+# ----------------------------
+test.pdf
+
+# ----------------------------
+# OS / Editor junk
+# ----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

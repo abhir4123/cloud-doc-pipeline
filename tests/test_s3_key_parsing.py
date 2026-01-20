@@ -1,4 +1,4 @@
-from hello_world.s3_ingest import _extract_document_id_from_s3_key
+from lambdas.s3_ingest import _extract_document_id_from_s3_key
 
 
 def test_extract_document_id_valid_key():

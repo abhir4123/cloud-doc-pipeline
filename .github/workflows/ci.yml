@@ -10,10 +10,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: cloud-doc-pipeline
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r hello_world/requirements.txt
+          pip install -r lambdas/requirements.txt
           pip install -r requirements-dev.txt
 
       - name: Run tests

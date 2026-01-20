@@ -2,7 +2,7 @@ import io
 
 from PyPDF2 import PdfWriter
 
-from hello_world.s3_ingest import extract_pdf_metadata
+from lambdas.s3_ingest import extract_pdf_metadata
 
 
 def _make_blank_pdf_bytes(num_pages: int = 1) -> bytes:
