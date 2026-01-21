@@ -73,6 +73,8 @@ Resources:
           KeyType: HASH
         - AttributeName: sk
           KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
 
   S3IngestFunction:
     Type: AWS::Serverless::Function
@@ -109,6 +111,81 @@ Resources:
                   - Name: suffix
                     Value: .pdf
 
+  ProcessDocumentDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${StageName}-process-document-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days
+
+  ProcessDocumentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: process_document.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocumentsTable
+        - DynamoDBStreamReadPolicy:
+            TableName: !Ref DocumentsTable
+            StreamName: !GetAtt DocumentsTable.StreamArn
+        # Allow Lambda (via its execution role) to send failed records to the DLQ
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ProcessDocumentDLQ.QueueName
+      Environment:
+        Variables:
+          DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
+      Events:
+        DocumentsStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt DocumentsTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumRetryAttempts: 2
+            BisectBatchOnFunctionError: true
+            MaximumRecordAgeInSeconds: 300
+            DestinationConfig:
+              OnFailure:
+                Destination: !GetAtt ProcessDocumentDLQ.Arn
+
+  ProcessDocumentErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${StageName}-ProcessDocumentFunction-Errors"
+      AlarmDescription: "Alarm if ProcessDocumentFunction reports errors"
+      Namespace: "AWS/Lambda"
+      MetricName: "Errors"
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessDocumentFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ProcessDocumentDLQMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${StageName}-ProcessDocumentDLQ-Messages"
+      AlarmDescription: "Alarm if messages appear in ProcessDocument DLQ"
+      Namespace: "AWS/SQS"
+      MetricName: "ApproximateNumberOfMessagesVisible"
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ProcessDocumentDLQ.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
 Outputs:
   ApiBaseUrl:
     Description: API Gateway base URL
@@ -125,3 +202,12 @@ Outputs:
   S3IngestFunctionArn:
     Description: S3 ingest Lambda Function ARN
     Value: !GetAtt S3IngestFunction.Arn
+  ProcessDocumentFunctionArn:
+    Description: Downstream processing Lambda ARN
+    Value: !GetAtt ProcessDocumentFunction.Arn
+  ProcessDocumentDLQName:
+    Description: DLQ name for ProcessDocumentFunction failures
+    Value: !GetAtt ProcessDocumentDLQ.QueueName
+  ProcessDocumentDLQArn:
+    Description: DLQ ARN for ProcessDocumentFunction failures
+    Value: !GetAtt ProcessDocumentDLQ.Arn
