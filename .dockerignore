@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Virtualenv / local python junk
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Pytest caches
+.pytest_cache
+
+# SAM build output
+.aws-sam
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Local PDFs and other artifacts
+*.pdf
