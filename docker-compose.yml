@@ -1,0 +1,5 @@
+services:
+  test:
+    build: .
+    container_name: cloud-doc-pipeline-tests
+    command: pytest -q
