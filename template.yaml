@@ -132,12 +132,16 @@ Resources:
         - DynamoDBStreamReadPolicy:
             TableName: !Ref DocumentsTable
             StreamName: !GetAtt DocumentsTable.StreamArn
-        # Allow Lambda (via its execution role) to send failed records to the DLQ
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt ProcessDocumentDLQ.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub "arn:aws:s3:::${ProjectName}-${StageName}-documents-${AWS::AccountId}/*"
       Environment:
         Variables:
           DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
+          DOCUMENTS_BUCKET_NAME: !Ref DocumentsBucket
       Events:
         DocumentsStream:
           Type: DynamoDB
@@ -146,11 +150,6 @@ Resources:
             StartingPosition: LATEST
             BatchSize: 10
             MaximumRetryAttempts: 2
-            BisectBatchOnFunctionError: true
-            MaximumRecordAgeInSeconds: 300
-            DestinationConfig:
-              OnFailure:
-                Destination: !GetAtt ProcessDocumentDLQ.Arn
 
   ProcessDocumentErrorsAlarm:
     Type: AWS::CloudWatch::Alarm

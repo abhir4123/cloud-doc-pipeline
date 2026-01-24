@@ -5,7 +5,7 @@
 # Virtualenv / local python junk
 .venv
 __pycache__
-*.pyc
+*.pyc 
 *.pyo
 *.pyd
 

@@ -2,12 +2,8 @@
 Downstream processing handler.
 
 Triggered by DynamoDB Streams when the document META item changes.
-When status becomes UPLOADED, mark it PROCESSED and write an audit record.
-
-This version adds:
-- Structured JSON logging
-- Safe idempotency (ConditionalCheckFailedException is treated as a skip)
-- No boto3 calls at import-time (helps tests/CI)
+When status becomes UPLOADED, mark it PROCESSED, write an audit record,
+and generate a processed output artifact in S3 (summary.json).
 """
 
 import json
@@ -17,57 +13,99 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
 
+# IMPORTANT: create clients lazily to avoid import-time AWS config errors in CI
+_dynamodb = None
+_s3 = None
+
+
+def _get_dynamodb():
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource("dynamodb")
+    return _dynamodb
+
+
+def _get_s3():
+    global _s3
+    if _s3 is None:
+        _s3 = boto3.client("s3")
+    return _s3
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _log(event_type: str, **fields) -> None:
-    payload = {
-        "event_type": event_type,
-        "ts": _utc_now_iso(),
-        **fields,
-    }
-    print(json.dumps(payload, default=str))
-
-
 def _is_meta_item(new_image: dict) -> bool:
-    # We use a known SK pattern: META#v1
+    # DynamoDB Streams uses typed attribute values: {"S": "..."}
     return new_image.get("sk", {}).get("S") == "META#v1"
 
 
-def _get_status(new_image: dict) -> str | None:
-    status_attr = new_image.get("status")
-    if not status_attr:
+def _get_str_attr(new_image: dict, name: str) -> str | None:
+    attr = new_image.get(name)
+    if not attr:
         return None
-    return status_attr.get("S")
+    return attr.get("S")
 
 
-def _get_document_id(new_image: dict, pk: str) -> str | None:
-    doc_id_attr = new_image.get("document_id")
-    if doc_id_attr and "S" in doc_id_attr:
-        return doc_id_attr["S"]
+def _get_num_attr(new_image: dict, name: str) -> int | None:
+    attr = new_image.get(name)
+    if not attr:
+        return None
+    n = attr.get("N")
+    if n is None:
+        return None
+    try:
+        return int(n)
+    except ValueError:
+        return None
 
-    # pk is DOC#<id>
-    if pk.startswith("DOC#") and "#" in pk:
+
+def _derive_document_id_from_pk(pk: str) -> str | None:
+    if pk.startswith("DOC#"):
         return pk.split("#", 1)[1]
-
     return None
+
+
+def _build_processed_summary(
+    new_image: dict, document_id: str, processed_at: str
+) -> dict:
+    return {
+        "document_id": document_id,
+        "status": "PROCESSED",
+        "processed_at": processed_at,
+        "filename": _get_str_attr(new_image, "filename"),
+        "bucket": _get_str_attr(new_image, "bucket"),
+        "s3_key": _get_str_attr(new_image, "s3_key"),
+        "page_count": _get_num_attr(new_image, "page_count"),
+        "text_preview": _get_str_attr(new_image, "text_preview") or "",
+        "processing_version": 1,
+    }
 
 
 def lambda_handler(event, context):
     table_name = os.environ["DOCUMENTS_TABLE_NAME"]
+    bucket_name = os.environ["DOCUMENTS_BUCKET_NAME"]
 
-    # Create boto3 resources inside handler (avoids import-time AWS config issues)
-    dynamodb = boto3.resource("dynamodb")
+    dynamodb = _get_dynamodb()
     table = dynamodb.Table(table_name)
+    s3 = _get_s3()
 
     records = event.get("Records", [])
     if not records:
-        _log("NO_RECORDS")
+        print(json.dumps({"event_type": "NO_RECORDS"}))
         return
 
-    _log("STREAM_BATCH_RECEIVED", record_count=len(records))
+    # Helpful: log batch arrival
+    print(
+        json.dumps(
+            {
+                "event_type": "STREAM_BATCH_RECEIVED",
+                "ts": _utc_now_iso(),
+                "record_count": len(records),
+            }
+        )
+    )
 
     for record in records:
         event_name = record.get("eventName")
@@ -82,32 +120,59 @@ def lambda_handler(event, context):
         if not _is_meta_item(new_image):
             continue
 
-        status = _get_status(new_image)
+        status = _get_str_attr(new_image, "status")
         if status != "UPLOADED":
-            # Only process transitions into UPLOADED
             continue
 
         pk = new_image["pk"]["S"]
         sk = new_image["sk"]["S"]
-        document_id = _get_document_id(new_image, pk)
+
+        document_id = _get_str_attr(
+            new_image, "document_id"
+        ) or _derive_document_id_from_pk(pk)
+        if not document_id:
+            print(json.dumps({"event_type": "SKIP_NO_DOCUMENT_ID", "pk": pk}))
+            continue
 
         now = _utc_now_iso()
         audit_sk = f"AUDIT#{now}"
-        processing_version = 1
 
-        _log(
-            "PROCESS_ATTEMPT",
-            pk=pk,
-            sk=sk,
-            document_id=document_id,
-            incoming_status=status,
+        processed_key = f"documents/{document_id}/processed/summary.json"
+
+        print(
+            json.dumps(
+                {
+                    "event_type": "PROCESS_ATTEMPT",
+                    "ts": now,
+                    "pk": pk,
+                    "sk": sk,
+                    "document_id": document_id,
+                    "incoming_status": status,
+                    "processed_output_key": processed_key,
+                }
+            )
         )
 
         try:
-            # Mark as PROCESSED, but only if currently UPLOADED (idempotent safety)
+            # 1) Generate summary JSON from stream image
+            summary = _build_processed_summary(new_image, document_id, now)
+            summary_bytes = json.dumps(summary, indent=2).encode("utf-8")
+
+            # 2) Upload processed artifact to S3
+            s3.put_object(
+                Bucket=bucket_name,
+                Key=processed_key,
+                Body=summary_bytes,
+                ContentType="application/json",
+            )
+
+            # 3) Mark as PROCESSED (idempotent safety: only if still UPLOADED)
             table.update_item(
                 Key={"pk": pk, "sk": sk},
-                UpdateExpression="SET #st = :processed, processed_at = :p, processing_version = :v, updated_at = :u",
+                UpdateExpression=(
+                    "SET #st = :processed, processed_at = :p, processing_version = :v, updated_at = :u, "
+                    "processed_output_bucket = :b, processed_output_key = :k"
+                ),
                 ConditionExpression="#st = :uploaded",
                 ExpressionAttributeNames={"#st": "status"},
                 ExpressionAttributeValues={
@@ -115,10 +180,13 @@ def lambda_handler(event, context):
                     ":processed": "PROCESSED",
                     ":p": now,
                     ":u": now,
-                    ":v": processing_version,
+                    ":v": 1,
+                    ":b": bucket_name,
+                    ":k": processed_key,
                 },
             )
 
+            # 4) Audit record
             table.put_item(
                 Item={
                     "pk": pk,
@@ -127,47 +195,51 @@ def lambda_handler(event, context):
                     "event_type": "DOCUMENT_PROCESSED",
                     "timestamp": now,
                     "details": {
-                        "processing_version": processing_version,
+                        "processing_version": 1,
+                        "processed_output_bucket": bucket_name,
+                        "processed_output_key": processed_key,
                     },
                 }
             )
 
-            _log(
-                "PROCESS_SUCCESS",
-                pk=pk,
-                document_id=document_id,
-                new_status="PROCESSED",
-                processing_version=processing_version,
+            print(
+                json.dumps(
+                    {
+                        "event_type": "PROCESS_SUCCESS",
+                        "ts": _utc_now_iso(),
+                        "pk": pk,
+                        "document_id": document_id,
+                        "new_status": "PROCESSED",
+                        "processing_version": 1,
+                        "processed_output_key": processed_key,
+                    }
+                )
             )
 
         except ClientError as e:
-            code = e.response.get("Error", {}).get("Code")
-
-            # This is expected sometimes due to retries / duplicates.
-            # Treat it as a SKIP, not a hard failure.
-            if code == "ConditionalCheckFailedException":
-                _log(
-                    "PROCESS_SKIP_ALREADY_HANDLED",
-                    pk=pk,
-                    document_id=document_id,
-                    reason="ConditionalCheckFailedException",
+            # AWS client errors (S3/DDB)
+            print(
+                json.dumps(
+                    {
+                        "event_type": "PROCESS_AWS_ERROR",
+                        "ts": _utc_now_iso(),
+                        "pk": pk,
+                        "document_id": document_id,
+                        "error": str(e),
+                    }
                 )
-                continue
-
-            _log(
-                "PROCESS_ERROR",
-                pk=pk,
-                document_id=document_id,
-                error_code=code,
-                error_message=str(e),
             )
             raise
-
         except Exception as e:
-            _log(
-                "PROCESS_ERROR",
-                pk=pk,
-                document_id=document_id,
-                error_message=str(e),
+            print(
+                json.dumps(
+                    {
+                        "event_type": "PROCESS_ERROR",
+                        "ts": _utc_now_iso(),
+                        "pk": pk,
+                        "document_id": document_id,
+                        "error": str(e),
+                    }
+                )
             )
             raise
