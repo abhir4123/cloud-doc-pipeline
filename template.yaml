@@ -44,6 +44,11 @@ Resources:
           Properties:
             Path: /documents
             Method: post
+        GetDocument:
+          Type: Api
+          Properties:
+            Path: /documents/{document_id}
+            Method: get
 
   DocumentsBucket:
     Type: AWS::S3::Bucket
@@ -111,12 +116,6 @@ Resources:
                   - Name: suffix
                     Value: .pdf
 
-  ProcessDocumentDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub "${ProjectName}-${StageName}-process-document-dlq"
-      MessageRetentionPeriod: 1209600 # 14 days
-
   ProcessDocumentFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -132,16 +131,9 @@ Resources:
         - DynamoDBStreamReadPolicy:
             TableName: !Ref DocumentsTable
             StreamName: !GetAtt DocumentsTable.StreamArn
-        - Statement:
-            - Effect: Allow
-              Action:
-                - s3:PutObject
-              Resource:
-                - !Sub "arn:aws:s3:::${ProjectName}-${StageName}-documents-${AWS::AccountId}/*"
       Environment:
         Variables:
           DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
-          DOCUMENTS_BUCKET_NAME: !Ref DocumentsBucket
       Events:
         DocumentsStream:
           Type: DynamoDB
@@ -150,40 +142,6 @@ Resources:
             StartingPosition: LATEST
             BatchSize: 10
             MaximumRetryAttempts: 2
-
-  ProcessDocumentErrorsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${ProjectName}-${StageName}-ProcessDocumentFunction-Errors"
-      AlarmDescription: "Alarm if ProcessDocumentFunction reports errors"
-      Namespace: "AWS/Lambda"
-      MetricName: "Errors"
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref ProcessDocumentFunction
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-
-  ProcessDocumentDLQMessagesAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${ProjectName}-${StageName}-ProcessDocumentDLQ-Messages"
-      AlarmDescription: "Alarm if messages appear in ProcessDocument DLQ"
-      Namespace: "AWS/SQS"
-      MetricName: "ApproximateNumberOfMessagesVisible"
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt ProcessDocumentDLQ.QueueName
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
 
 Outputs:
   ApiBaseUrl:
@@ -204,9 +162,3 @@ Outputs:
   ProcessDocumentFunctionArn:
     Description: Downstream processing Lambda ARN
     Value: !GetAtt ProcessDocumentFunction.Arn
-  ProcessDocumentDLQName:
-    Description: DLQ name for ProcessDocumentFunction failures
-    Value: !GetAtt ProcessDocumentDLQ.QueueName
-  ProcessDocumentDLQArn:
-    Description: DLQ ARN for ProcessDocumentFunction failures
-    Value: !GetAtt ProcessDocumentDLQ.Arn

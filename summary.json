@@ -1,10 +1,10 @@
 {
-  "document_id": "a90b77e4-1bf1-47a1-94e2-88865639fa31",
+  "document_id": "a7fdd8ab-ebe4-408a-ac88-3d93b39ad6b8",
   "status": "PROCESSED",
-  "processed_at": "2026-01-24T03:49:19.054802+00:00",
+  "processed_at": "2026-01-24T05:21:16.676124+00:00",
   "filename": "test.pdf",
   "bucket": "cloud-doc-pipeline-dev2-documents-813176029489",
-  "s3_key": "documents/a90b77e4-1bf1-47a1-94e2-88865639fa31/original/test.pdf",
+  "s3_key": "documents/a7fdd8ab-ebe4-408a-ac88-3d93b39ad6b8/original/test.pdf",
   "page_count": 1,
   "text_preview": "This is a test pdf",
   "processing_version": 1
